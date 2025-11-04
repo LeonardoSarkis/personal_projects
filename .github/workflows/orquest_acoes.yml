@@ -1,9 +1,10 @@
 name: Executar Script Python
 
 on:
+  workflow_dispatch:    # Permite rodar manualmente
   schedule:
-    - cron: '0 13 * * *'   # 10:00 São Paulo (UTC-3)
-    - cron: '0 19 * * *'   # 16:00 São Paulo (UTC-3)
+    - cron: '0 13 * * *'
+    - cron: '0 19 * * *'
 
 jobs:
   run-python-script:
