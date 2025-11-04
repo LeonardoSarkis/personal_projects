@@ -1,0 +1,30 @@
+name: Executar Script Python
+
+on:
+  schedule:
+    - cron: '0 13 * * *'   # 10:00 São Paulo (UTC-3)
+    - cron: '0 19 * * *'   # 16:00 São Paulo (UTC-3)
+
+jobs:
+  run-python-script:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v3
+
+      - name: Configurar Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Instalar dependências
+        run: |
+          pip install -r requirements.txt
+
+      - name: Executar script
+        env:
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+        run: |
+          python cod_acoes_nacionais.py
