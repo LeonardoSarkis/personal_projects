@@ -28,12 +28,9 @@ DUR_MAX = 11
 ANO = date.today().year
 MESES = [9]                # Apenas setembro
 
-# Aceleração / Resiliência
-HTTP_TIMEOUT = 12          # timeouts mais agressivos
-MAX_RESULTS = 10           # menos resultados por chamada já trazem os mais baratos
-TIME_BUDGET_SECONDS = 240  # (opcional) limite de 4 minutos para encerrar cedo
+MAX_RESULTS = 10
+TIME_BUDGET_SECONDS = 240
 
-# Mapa simples de fallback para nomes de cias (caso a API não envie 'dictionaries')
 CARRIER_NAME_FALLBACK = {
     "AZ": "ITA Airways",
     "TP": "TAP Air Portugal",
@@ -64,7 +61,8 @@ def obter_access_token():
         "client_id": AMADEUS_API_KEY,
         "client_secret": AMADEUS_API_SECRET
     }
-    resp = requests.post(url, headers=headers, data=data, timeout=HTTP_TIMEOUT)
+    # REMOVIDO TIMEOUT
+    resp = requests.post(url, headers=headers, data=data)
     resp.raise_for_status()
     return resp.json()["access_token"]
 
@@ -85,7 +83,8 @@ def buscar_ofertas(access_token, origem, destino, ida, volta):
         "max": MAX_RESULTS
     }
 
-    resp = requests.get(url, headers=headers, params=params, timeout=HTTP_TIMEOUT)
+    # REMOVIDO TIMEOUT
+    resp = requests.get(url, headers=headers, params=params)
     if resp.status_code != 200:
         print(f"[WARN] {origem}->{destino} {ida} {volta} status={resp.status_code}")
         return None
@@ -95,15 +94,9 @@ def buscar_ofertas(access_token, origem, destino, ida, volta):
     if not data:
         return None
 
-    # Dicionários opcionais (nomes das cias)
-    dictionaries = payload.get("dictionaries", {}) or {}
-    carriers_dict = dictionaries.get("carriers", {}) or {}
-
-    # Menor preço
     melhor = min(data, key=lambda x: float(x["price"]["grandTotal"]))
     preco = float(melhor["price"]["grandTotal"])
 
-    # Extrair segmentos ida/volta
     itineraries = melhor.get("itineraries", [])
     if not itineraries:
         return None
@@ -114,21 +107,22 @@ def buscar_ofertas(access_token, origem, destino, ida, volta):
     ida_segs = ida_itin.get("segments", [])
     volta_segs = volta_itin.get("segments", [])
 
-    if not ida_segs:
+    # 🔥 MANTER APENAS VOOS DIRETOS
+    if len(ida_segs) != 1 or len(volta_segs) != 1:
         return None
 
-    # Aeroportos (IATA)
     origem_airport_ida = ida_segs[0]["departure"]["iataCode"]
     destino_airport_ida = ida_segs[-1]["arrival"]["iataCode"]
 
-    origem_airport_volta = volta_segs[0]["departure"]["iataCode"] if volta_segs else destino
-    destino_airport_volta = volta_segs[-1]["arrival"]["iataCode"] if volta_segs else origem
+    origem_airport_volta = volta_segs[0]["departure"]["iataCode"]
+    destino_airport_volta = volta_segs[-1]["arrival"]["iataCode"]
 
-    # Datas (YYYY-MM-DD) a partir dos segmentos reais
-    ida_data_real = ida_segs[0]["departure"]["at"][:10]  # YYYY-MM-DD
-    volta_data_real = volta_segs[-1]["arrival"]["at"][:10] if volta_segs else volta.strftime("%Y-%m-%d")
+    ida_data_real = ida_segs[0]["departure"]["at"][:10]
+    volta_data_real = volta_segs[-1]["arrival"]["at"][:10]
 
-    # Companhias (marketingCarrierCode/carrierCode em todos os segmentos)
+    dictionaries = payload.get("dictionaries", {}) or {}
+    carriers_dict = dictionaries.get("carriers", {}) or {}
+
     carriers_codes = set()
     for s in ida_segs + volta_segs:
         code = s.get("carrierCode") or s.get("marketingCarrierCode")
@@ -140,7 +134,6 @@ def buscar_ofertas(access_token, origem, destino, ida, volta):
         nome = carriers_dict.get(code) or CARRIER_NAME_FALLBACK.get(code) or "Companhia desconhecida"
         carriers_list.append(f"{nome} ({code})")
 
-    # Links práticos
     google_link = f"https://www.google.com/flights?hl=pt-BR#flt={origem}.{destino}.{ida_data_real}*{destino}.{origem}.{volta_data_real}"
     skyscanner_link = f"https://www.skyscanner.com/transport/flights/{origem}/{destino}/{ida_data_real}/{volta_data_real}/"
     kiwi_link = f"https://www.kiwi.com/br/search/results/{origem}-{ida_data_real}/{destino}-{volta_data_real}"
@@ -171,15 +164,14 @@ def encontrar_melhor_voo(access_token):
     melhor_global = None
     start_ts = time.time()
 
-    for mes in MESES:          # só 9
+    for mes in MESES:          
         for dia in range(1, 29):
             ida = date(ANO, mes, dia)
 
             for dur in range(DUR_MIN, DUR_MAX + 1):
                 volta = ida + timedelta(days=dur)
 
-                for origem in ORIGENS:  # só GRU
-                    # time-budget opcional
+                for origem in ORIGENS:
                     if time.time() - start_ts > TIME_BUDGET_SECONDS:
                         print("[INFO] Time budget atingido. Encerrando busca com o melhor atual.")
                         return melhor_global
@@ -212,7 +204,7 @@ def enviar_email(resultado):
         corpo = f"""
 Olá,
 
-Nenhum voo encontrado dentro dos critérios.
+Nenhum voo direto encontrado dentro dos critérios.
 Origem: GRU → Destino: FCO
 Janela analisada: setembro/{ANO}
 Permanência: {DUR_MIN}–{DUR_MAX} dias
@@ -226,7 +218,7 @@ Execução: {agora}
         volta_airports = resultado["airports"]["volta"]
 
         corpo = f"""
-MELHOR OPÇÃO ENCONTRADA – AMADEUS API (SETEMBRO + GRU)
+MELHOR OPÇÃO ENCONTRADA – AMADEUS API (VOO DIRETO)
 
 🛫 Origem (cidade/airport): {resultado["origem"]} → {ida_airports["partida"]}
 🛬 Destino (cidade/airport): {resultado["destino"]} → {ida_airports["chegada"]}
@@ -244,9 +236,8 @@ MELHOR OPÇÃO ENCONTRADA – AMADEUS API (SETEMBRO + GRU)
 • Kiwi.com:      {resultado["links"]["kiwi"]}
 
 Observações:
-• Preços e disponibilidade mudam a qualquer momento.
-• Cias listadas vêm dos segmentos do itinerário mais barato.
-• Airports são códigos IATA (partida/chegada de ida e volta).
+• Filtrados apenas voos 100% diretos (sem conexões).
+• Preços mudam rapidamente.
 
 Execução: {agora}
 """
@@ -272,7 +263,7 @@ if __name__ == "__main__":
     print("Obtendo access token...")
     token = obter_access_token()
 
-    print("Buscando o melhor voo (Setembro + GRU → FCO)…")
+    print("Buscando o melhor voo direto (Setembro + GRU → FCO)…")
     melhor_voo = encontrar_melhor_voo(token)
 
     print("Enviando e-mail…")
