@@ -16,7 +16,7 @@ EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PASS = os.getenv("EMAIL_PASS")
 
 EMAIL_FROM = EMAIL_USER
-EMAIL_TO = ["leosarkisj@gmail.com"]  # coloque mais e-mails se quiser
+EMAIL_TO = ["leosarkisj@gmail.com"]  # adicione outros e-mails se quiser
 
 ORIGENS = ["GRU", "CGH"]
 DESTINO = "FCO"
@@ -27,8 +27,9 @@ DUR_MAX = 11
 ANO = date.today().year
 MESES = [9, 10, 11]  # setembro, outubro, novembro
 
+
 # ===============================
-# FUNÇÃO PARA OBTER ACCESS TOKEN
+# 1) FUNÇÃO PARA OBTER ACCESS TOKEN
 # ===============================
 
 def obter_access_token():
@@ -44,8 +45,9 @@ def obter_access_token():
     resp.raise_for_status()
     return resp.json()["access_token"]
 
+
 # ===============================
-# BUSCA DE VOO NA AMADEUS
+# 2) BUSCAR OFERTAS (AMADS API)
 # ===============================
 
 def buscar_ofertas(access_token, origem, destino, ida, volta):
@@ -66,6 +68,7 @@ def buscar_ofertas(access_token, origem, destino, ida, volta):
     }
 
     resp = requests.get(url, headers=headers, params=params)
+
     if resp.status_code != 200:
         return None
 
@@ -73,7 +76,6 @@ def buscar_ofertas(access_token, origem, destino, ida, volta):
     if not data:
         return None
 
-    # Ordena pelo menor preço total
     melhor = sorted(data, key=lambda x: float(x["price"]["grandTotal"]))[0]
 
     return {
@@ -86,14 +88,14 @@ def buscar_ofertas(access_token, origem, destino, ida, volta):
 
 
 # ===============================
-# ROTINA PARA ACHAR O MELHOR COMBO
+# 3) ACHAR O MELHOR COMBO
 # ===============================
 
 def encontrar_melhor_voo(access_token):
     melhor_global = None
 
     for mes in MESES:
-        for dia in range(1, 29):  # evita datas inválidas
+        for dia in range(1, 29):
             try:
                 ida = date(ANO, mes, dia)
             except:
@@ -113,8 +115,9 @@ def encontrar_melhor_voo(access_token):
 
     return melhor_global
 
+
 # ===============================
-# ENVIO DE E-MAIL
+# 4) ENVIO DE E-MAIL
 # ===============================
 
 def enviar_email(resultado):
@@ -132,6 +135,8 @@ Nenhum voo encontrado dentro dos critérios.
 Execução: {agora}
 """
     else:
+        dur = (datetime.fromisoformat(resultado["volta"]) - datetime.fromisoformat(resultado["ida"])).days
+
         corpo = f"""
 MELHOR OPÇÃO ENCONTRADA – AMADEUS API
 
@@ -141,7 +146,7 @@ Destino: {resultado["destino"]}
 Ida: {resultado["ida"]}
 Volta: {resultado["volta"]}
 
-Duração: {(datetime.fromisoformat(resultado["volta"]) - datetime.fromisoformat(resultado["ida"])).days} dias
+Duração: {dur} dias
 Preço total: R$ {resultado["preco"]:.2f}
 
 Execução: {agora}
@@ -149,3 +154,32 @@ Execução: {agora}
 
     msg.set_content(corpo)
 
+    # ----- ENVIO REAL DO EMAIL -----
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+        smtp.login(EMAIL_USER, EMAIL_PASS)
+        smtp.send_message(msg)
+
+    print("Email enviado com sucesso!")
+
+
+# ===============================
+# MAIN
+# ===============================
+
+if __name__ == "__main__":
+    if not AMADEUS_API_KEY or not AMADEUS_API_SECRET:
+        raise Exception("Defina AMADEUS_API_KEY e AMADEUS_API_SECRET nos secrets ou ambiente.")
+
+    if not EMAIL_USER or not EMAIL_PASS:
+        raise Exception("Defina EMAIL_USER e EMAIL_PASS nos secrets ou ambiente.")
+
+    print("Obtendo access token...")
+    token = obter_access_token()
+
+    print("Buscando melhor voo...")
+    melhor_voo = encontrar_melhor_voo(token)
+
+    print("Enviando email...")
+    enviar_email(melhor_voo)
+
+    print("Finalizado.")
