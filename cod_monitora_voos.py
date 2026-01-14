@@ -204,3 +204,78 @@ def enviar_email(resultado):
     msg = EmailMessage()
     msg["Subject"] = "💸 Melhor Preço GRU ⇄ Roma (9–11 dias, setembro) – Amadeus API"
     msg["From"] = EMAIL_FROM
+    msg["To"] = ", ".join(EMAIL_TO)
+
+    agora = datetime.now().strftime("%d/%m/%Y %H:%M")
+
+    if resultado is None:
+        corpo = f"""
+Olá,
+
+Nenhum voo encontrado dentro dos critérios.
+Origem: GRU → Destino: FCO
+Janela analisada: setembro/{ANO}
+Permanência: {DUR_MIN}–{DUR_MAX} dias
+
+Execução: {agora}
+"""
+    else:
+        dur = (datetime.fromisoformat(resultado["volta"]) - datetime.fromisoformat(resultado["ida"])).days
+        cia_str = ", ".join(resultado["cia_list"]) if resultado["cia_list"] else "—"
+        ida_airports = resultado["airports"]["ida"]
+        volta_airports = resultado["airports"]["volta"]
+
+        corpo = f"""
+MELHOR OPÇÃO ENCONTRADA – AMADEUS API (SETEMBRO + GRU)
+
+🛫 Origem (cidade/airport): {resultado["origem"]} → {ida_airports["partida"]}
+🛬 Destino (cidade/airport): {resultado["destino"]} → {ida_airports["chegada"]}
+
+➡️ Ida:   {resultado["ida"]}
+⬅️ Volta: {resultado["volta"]}
+🕒 Duração: {dur} dias
+
+✈️ Companhia(s): {cia_str}
+💰 Preço total: R$ {resultado["preco"]:.2f}
+
+🔗 Links úteis para buscar e comprar:
+• Google Flights: {resultado["links"]["google"]}
+• Skyscanner:    {resultado["links"]["skyscanner"]}
+• Kiwi.com:      {resultado["links"]["kiwi"]}
+
+Observações:
+• Preços e disponibilidade mudam a qualquer momento.
+• Cias listadas vêm dos segmentos do itinerário mais barato.
+• Airports são códigos IATA (partida/chegada de ida e volta).
+
+Execução: {agora}
+"""
+
+    msg.set_content(corpo)
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+        smtp.login(EMAIL_USER, EMAIL_PASS)
+        smtp.send_message(msg)
+
+    print("Email enviado com sucesso!")
+
+# ===============================
+# MAIN
+# ===============================
+
+if __name__ == "__main__":
+    if not AMADEUS_API_KEY or not AMADEUS_API_SECRET:
+        raise Exception("Defina AMADEUS_API_KEY e AMADEUS_API_SECRET nos secrets/ambiente.")
+    if not EMAIL_USER or not EMAIL_PASS:
+        raise Exception("Defina EMAIL_USER e EMAIL_PASS nos secrets/ambiente.")
+
+    print("Obtendo access token...")
+    token = obter_access_token()
+
+    print("Buscando o melhor voo (Setembro + GRU → FCO)…")
+    melhor_voo = encontrar_melhor_voo(token)
+
+    print("Enviando e-mail…")
+    enviar_email(melhor_voo)
+
+    print("Finalizado.")
