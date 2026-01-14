@@ -1,3 +1,4 @@
+
 import os
 import yfinance as yf
 import pandas as pd
@@ -24,17 +25,24 @@ dados = []
 for ticker in tickers:
     acao = yf.Ticker(ticker)
 
-    # Histórico de preços
+    # Histórico de preços (7 dias)
     historico = acao.history(period='7d')
     fechamento_ontem = historico['Close'].iloc[-2] if len(historico) >= 2 else None
+
+    # Preço atual
     preco_atual = acao.info.get('regularMarketPrice', None)
+
+    # Histórico 3 meses para calcular preço médio
+    historico_3m = acao.history(period="3mo")
+    preco_medio_3m = historico_3m['Close'].mean() if not historico_3m.empty else None
 
     # Dividendos
     dividendos = acao.dividends
     dividendos.index = dividendos.index.tz_convert("America/Sao_Paulo")  # garantir timezone compatível
 
     dividendos_12m = dividendos[dividendos.index >= um_ano_atras].sum()
-    dividendos_ano_passado = dividendos[(dividendos.index >= inicio_ano_passado) & (dividendos.index <= fim_ano_passado)].sum()
+    dividendos_ano_passado = dividendos[(dividendos.index >= inicio_ano_passado) &
+                                        (dividendos.index <= fim_ano_passado)].sum()
 
     # Dividend Yield
     dy_12m = (dividendos_12m / preco_atual * 100) if preco_atual else None
@@ -44,6 +52,7 @@ for ticker in tickers:
         'Ticker': ticker,
         'Fechamento Ontem': round(fechamento_ontem, 2) if fechamento_ontem else 'N/A',
         'Preço Atual': round(preco_atual, 2) if preco_atual else 'N/A',
+        'Preço Médio 3M': round(preco_medio_3m, 2) if preco_medio_3m else 'N/A',
         'Dividendos 12M': round(dividendos_12m, 2),
         'Dividendos Ano Passado': round(dividendos_ano_passado, 2),
         'DY 12M (%)': round(dy_12m, 2) if dy_12m else 'N/A',
@@ -62,7 +71,6 @@ msg = EmailMessage()
 msg['Subject'] = 'Relatório Diário de Ações com Dividendos'
 msg['From'] = 'leosarkisj@gmail.com'
 msg['To'] = ['leosarkisj@gmail.com','andreluisribeirogarcia@gmail.com']
-
 
 # Gerar tabela em HTML
 tabela_html = df.to_html(index=False, border=1)
@@ -86,4 +94,3 @@ msg.add_alternative(f"""
 with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
     smtp.login(email_user, email_pass)
     smtp.send_message(msg)
-
