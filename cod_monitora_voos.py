@@ -107,10 +107,6 @@ def buscar_ofertas(access_token, origem, destino, ida, volta):
     ida_segs = ida_itin.get("segments", [])
     volta_segs = volta_itin.get("segments", [])
 
-    # 🔥 MANTER APENAS VOOS DIRETOS
-    if len(ida_segs) != 1 or len(volta_segs) != 1:
-        return None
-
     origem_airport_ida = ida_segs[0]["departure"]["iataCode"]
     destino_airport_ida = ida_segs[-1]["arrival"]["iataCode"]
 
