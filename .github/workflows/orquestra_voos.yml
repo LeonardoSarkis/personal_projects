@@ -1,0 +1,29 @@
+
+name: Monitor Voos SP-Roma
+
+on:
+  schedule:
+    - cron: "0 9 * * *"  # todo dia às 06h BRT (9h UTC)
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      AMADEUS_API_KEY: ${{ secrets.AMADEUS_API_KEY }}
+      AMADEUS_API_SECRET: ${{ secrets.AMADEUS_API_SECRET }}
+      EMAIL_USER: ${{ secrets.EMAIL_USER }}
+      EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run script
+        run: python cod_monitora_voos.py
