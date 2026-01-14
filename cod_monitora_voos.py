@@ -4,6 +4,7 @@ import requests
 from datetime import date, timedelta, datetime
 from email.message import EmailMessage
 import smtplib
+import time
 
 # ===============================
 # CONFIGURAÇÕES DO USUÁRIO
@@ -18,18 +19,41 @@ EMAIL_PASS = os.getenv("EMAIL_PASS")
 EMAIL_FROM = EMAIL_USER
 EMAIL_TO = ["leosarkisj@gmail.com"]  # adicione outros e-mails se quiser
 
-ORIGENS = ["GRU", "CGH"]
-DESTINO = "FCO"
+ORIGENS = ["GRU"]          # Apenas Guarulhos
+DESTINO = "FCO"            # Roma Fiumicino
 
 DUR_MIN = 9
 DUR_MAX = 11
 
 ANO = date.today().year
-MESES = [9, 10, 11]  # setembro, outubro, novembro
+MESES = [9]                # Apenas setembro
 
+# Aceleração / Resiliência
+HTTP_TIMEOUT = 12          # timeouts mais agressivos
+MAX_RESULTS = 10           # menos resultados por chamada já trazem os mais baratos
+TIME_BUDGET_SECONDS = 240  # (opcional) limite de 4 minutos para encerrar cedo
+
+# Mapa simples de fallback para nomes de cias (caso a API não envie 'dictionaries')
+CARRIER_NAME_FALLBACK = {
+    "AZ": "ITA Airways",
+    "TP": "TAP Air Portugal",
+    "AF": "Air France",
+    "KL": "KLM",
+    "IB": "Iberia",
+    "LH": "Lufthansa",
+    "LX": "SWISS",
+    "TK": "Turkish Airlines",
+    "UA": "United Airlines",
+    "BA": "British Airways",
+    "AA": "American Airlines",
+    "DL": "Delta Air Lines",
+    "QR": "Qatar Airways",
+    "EK": "Emirates",
+    "EY": "Etihad Airways"
+}
 
 # ===============================
-# 1) FUNÇÃO PARA OBTER ACCESS TOKEN
+# 1) TOKEN OAUTH2 (AMADEUS)
 # ===============================
 
 def obter_access_token():
@@ -40,23 +64,17 @@ def obter_access_token():
         "client_id": AMADEUS_API_KEY,
         "client_secret": AMADEUS_API_SECRET
     }
-
-    resp = requests.post(url, headers=headers, data=data)
+    resp = requests.post(url, headers=headers, data=data, timeout=HTTP_TIMEOUT)
     resp.raise_for_status()
     return resp.json()["access_token"]
 
-
 # ===============================
-# 2) BUSCAR OFERTAS (AMADS API)
+# 2) BUSCAR OFERTAS
 # ===============================
 
 def buscar_ofertas(access_token, origem, destino, ida, volta):
     url = "https://test.api.amadeus.com/v2/shopping/flight-offers"
-
-    headers = {
-        "Authorization": f"Bearer {access_token}"
-    }
-
+    headers = {"Authorization": f"Bearer {access_token}"}
     params = {
         "originLocationCode": origem,
         "destinationLocationCode": destino,
@@ -64,47 +82,109 @@ def buscar_ofertas(access_token, origem, destino, ida, volta):
         "returnDate": volta.strftime("%Y-%m-%d"),
         "adults": 1,
         "currencyCode": "BRL",
-        "max": 20
+        "max": MAX_RESULTS
     }
 
-    resp = requests.get(url, headers=headers, params=params)
-
+    resp = requests.get(url, headers=headers, params=params, timeout=HTTP_TIMEOUT)
     if resp.status_code != 200:
+        print(f"[WARN] {origem}->{destino} {ida} {volta} status={resp.status_code}")
         return None
 
-    data = resp.json().get("data", [])
+    payload = resp.json()
+    data = payload.get("data", [])
     if not data:
         return None
 
-    melhor = sorted(data, key=lambda x: float(x["price"]["grandTotal"]))[0]
+    # Dicionários opcionais (nomes das cias)
+    dictionaries = payload.get("dictionaries", {}) or {}
+    carriers_dict = dictionaries.get("carriers", {}) or {}
+
+    # Menor preço
+    melhor = min(data, key=lambda x: float(x["price"]["grandTotal"]))
+    preco = float(melhor["price"]["grandTotal"])
+
+    # Extrair segmentos ida/volta
+    itineraries = melhor.get("itineraries", [])
+    if not itineraries:
+        return None
+
+    ida_itin = itineraries[0]
+    volta_itin = itineraries[1] if len(itineraries) > 1 else itineraries[0]
+
+    ida_segs = ida_itin.get("segments", [])
+    volta_segs = volta_itin.get("segments", [])
+
+    if not ida_segs:
+        return None
+
+    # Aeroportos (IATA)
+    origem_airport_ida = ida_segs[0]["departure"]["iataCode"]
+    destino_airport_ida = ida_segs[-1]["arrival"]["iataCode"]
+
+    origem_airport_volta = volta_segs[0]["departure"]["iataCode"] if volta_segs else destino
+    destino_airport_volta = volta_segs[-1]["arrival"]["iataCode"] if volta_segs else origem
+
+    # Datas (YYYY-MM-DD) a partir dos segmentos reais
+    ida_data_real = ida_segs[0]["departure"]["at"][:10]  # YYYY-MM-DD
+    volta_data_real = volta_segs[-1]["arrival"]["at"][:10] if volta_segs else volta.strftime("%Y-%m-%d")
+
+    # Companhias (marketingCarrierCode/carrierCode em todos os segmentos)
+    carriers_codes = set()
+    for s in ida_segs + volta_segs:
+        code = s.get("carrierCode") or s.get("marketingCarrierCode")
+        if code:
+            carriers_codes.add(code)
+
+    carriers_list = []
+    for code in sorted(carriers_codes):
+        nome = carriers_dict.get(code) or CARRIER_NAME_FALLBACK.get(code) or "Companhia desconhecida"
+        carriers_list.append(f"{nome} ({code})")
+
+    # Links práticos
+    google_link = f"https://www.google.com/flights?hl=pt-BR#flt={origem}.{destino}.{ida_data_real}*{destino}.{origem}.{volta_data_real}"
+    skyscanner_link = f"https://www.skyscanner.com/transport/flights/{origem}/{destino}/{ida_data_real}/{volta_data_real}/"
+    kiwi_link = f"https://www.kiwi.com/br/search/results/{origem}-{ida_data_real}/{destino}-{volta_data_real}"
 
     return {
-        "preco": float(melhor["price"]["grandTotal"]),
-        "ida": ida.strftime("%Y-%m-%d"),
-        "volta": volta.strftime("%Y-%m-%d"),
+        "preco": preco,
+        "ida": ida_data_real,
+        "volta": volta_data_real,
         "origem": origem,
-        "destino": destino
+        "destino": destino,
+        "cia_list": carriers_list,
+        "airports": {
+            "ida": {"partida": origem_airport_ida, "chegada": destino_airport_ida},
+            "volta": {"partida": origem_airport_volta, "chegada": destino_airport_volta}
+        },
+        "links": {
+            "google": google_link,
+            "skyscanner": skyscanner_link,
+            "kiwi": kiwi_link
+        }
     }
 
-
 # ===============================
-# 3) ACHAR O MELHOR COMBO
+# 3) COMPARAR COMBINAÇÕES (SETEMBRO + GRU)
 # ===============================
 
 def encontrar_melhor_voo(access_token):
     melhor_global = None
+    start_ts = time.time()
 
-    for mes in MESES:
+    for mes in MESES:          # só 9
         for dia in range(1, 29):
-            try:
-                ida = date(ANO, mes, dia)
-            except:
-                continue
+            ida = date(ANO, mes, dia)
 
             for dur in range(DUR_MIN, DUR_MAX + 1):
                 volta = ida + timedelta(days=dur)
 
-                for origem in ORIGENS:
+                for origem in ORIGENS:  # só GRU
+                    # time-budget opcional
+                    if time.time() - start_ts > TIME_BUDGET_SECONDS:
+                        print("[INFO] Time budget atingido. Encerrando busca com o melhor atual.")
+                        return melhor_global
+
+                    print(f"[INFO] Consultando {origem}->{DESTINO} | ida {ida} volta {volta} ...")
                     resultado = buscar_ofertas(access_token, origem, DESTINO, ida, volta)
 
                     if not resultado:
@@ -112,74 +192,15 @@ def encontrar_melhor_voo(access_token):
 
                     if (melhor_global is None) or (resultado["preco"] < melhor_global["preco"]):
                         melhor_global = resultado
+                        print(f"[OK] Novo melhor: R$ {resultado['preco']:.2f} | {resultado['ida']} - {resultado['volta']} | cias={', '.join(resultado['cia_list'])}")
 
     return melhor_global
 
-
 # ===============================
-# 4) ENVIO DE E-MAIL
+# 4) ENVIO DE E-MAIL COMPLETO
 # ===============================
 
 def enviar_email(resultado):
     msg = EmailMessage()
-    msg["Subject"] = "🔔 Melhor Preço SP ⇄ Roma Encontrado (Amadeus API)"
+    msg["Subject"] = "💸 Melhor Preço GRU ⇄ Roma (9–11 dias, setembro) – Amadeus API"
     msg["From"] = EMAIL_FROM
-    msg["To"] = ", ".join(EMAIL_TO)
-
-    agora = datetime.now().strftime("%d/%m/%Y %H:%M")
-
-    if resultado is None:
-        corpo = f"""
-Nenhum voo encontrado dentro dos critérios.
-
-Execução: {agora}
-"""
-    else:
-        dur = (datetime.fromisoformat(resultado["volta"]) - datetime.fromisoformat(resultado["ida"])).days
-
-        corpo = f"""
-MELHOR OPÇÃO ENCONTRADA – AMADEUS API
-
-Origem: {resultado["origem"]}
-Destino: {resultado["destino"]}
-
-Ida: {resultado["ida"]}
-Volta: {resultado["volta"]}
-
-Duração: {dur} dias
-Preço total: R$ {resultado["preco"]:.2f}
-
-Execução: {agora}
-"""
-
-    msg.set_content(corpo)
-
-    # ----- ENVIO REAL DO EMAIL -----
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-        smtp.login(EMAIL_USER, EMAIL_PASS)
-        smtp.send_message(msg)
-
-    print("Email enviado com sucesso!")
-
-
-# ===============================
-# MAIN
-# ===============================
-
-if __name__ == "__main__":
-    if not AMADEUS_API_KEY or not AMADEUS_API_SECRET:
-        raise Exception("Defina AMADEUS_API_KEY e AMADEUS_API_SECRET nos secrets ou ambiente.")
-
-    if not EMAIL_USER or not EMAIL_PASS:
-        raise Exception("Defina EMAIL_USER e EMAIL_PASS nos secrets ou ambiente.")
-
-    print("Obtendo access token...")
-    token = obter_access_token()
-
-    print("Buscando melhor voo...")
-    melhor_voo = encontrar_melhor_voo(token)
-
-    print("Enviando email...")
-    enviar_email(melhor_voo)
-
-    print("Finalizado.")
